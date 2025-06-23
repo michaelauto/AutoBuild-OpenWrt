@@ -14,5 +14,6 @@ for line in lines:
         domains.append(domain)
 
 with open("always_real_ip.conf", "w") as f:
+    f.write("#!name=绕过直连地址\n")
     f.write("[General]\n")
     f.write(f"always-real-ip = {','.join(domains)}\n")
