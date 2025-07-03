@@ -1,54 +1,86 @@
-name: Fetch and Parse SatImg
+name: Fetch and Commit Satellite Image
 
 on:
+  schedule:
+    - cron: "*/10 * * * *"  # 每10分钟运行（UTC时间）
   workflow_dispatch:
 
 jobs:
-  fetch-satimg:
+  fetch_and_commit:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Setup Node.js
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true  # 允许 commit 回 repo
+
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Fetch and parse SatImg JS
+      - name: Fetch imgPath from SatImg and download image as satimg.jpg
         run: |
           cat << 'EOF' > fetch_satimg.js
           const https = require('https');
+          const fs = require('fs');
           const vm = require('vm');
 
-          function fetchJS(url) {
+          function fetchText(url) {
             return new Promise((resolve, reject) => {
-              https.get(url, res => {
+              https.get(url, (res) => {
                 let data = '';
                 res.on('data', chunk => data += chunk);
                 res.on('end', () => resolve(data));
-              }).on('error', err => reject(err));
+              }).on('error', reject);
+            });
+          }
+
+          function fetchBinary(url, dest) {
+            return new Promise((resolve, reject) => {
+              https.get(url, (res) => {
+                const file = fs.createWriteStream(dest);
+                res.pipe(file);
+                file.on('finish', () => file.close(resolve));
+              }).on('error', reject);
             });
           }
 
           (async () => {
             try {
-              const url = 'https://www.cwa.gov.tw/Data/js/obs_img/Observe_sat.js';
-              const jsCode = await fetchJS(url);
+              const jsUrl = 'https://www.cwa.gov.tw/Data/js/obs_img/Observe_sat.js';
+              const jsCode = await fetchText(jsUrl);
 
               const context = {};
-              vm.createContext(context); // 安全沙箱
-              vm.runInContext(jsCode, context); // 执行JS定义
+              vm.createContext(context);
+              vm.runInContext(jsCode, context);
 
-              const SatImg = context.SatImg;
+              const imgPath = context.SatImg['Tab0']['Area0']['size0']['C'][0]['img'];
+              const fullUrl = `https://www.cwa.gov.tw/Data/satellite/${imgPath}`;
+              console.log('✅ Downloading:', fullUrl);
 
-              const imgPath = SatImg['Tab0']['Area0']['size0']['C'][0]['img'];
-              const timeText = SatImg['Tab0']['Area0']['size0']['C'][0]['text'];
-
-              console.log('✅ Image Path:', imgPath);
-              console.log('✅ Time Text:', timeText);
+              await fetchBinary(fullUrl, 'satimg.jpg');
+              console.log('✅ Saved as satimg.jpg');
             } catch (e) {
-              console.error('❌ Error:', e);
+              console.error('❌ Error:', e.message);
               process.exit(1);
             }
           })();
           EOF
 
           node fetch_satimg.js
+
+      - name: Commit and push image
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet && git ls-files --error-unmatch satimg.jpg; then
+            echo "✅ No changes to commit."
+          else
+            git add satimg.jpg
+            git commit -m "Update satimg.jpg at $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+            git push
+            echo "✅ Image committed and pushed."
+          fi
