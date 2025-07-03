@@ -81,6 +81,6 @@ jobs:
           else
             git add satimg.jpg
             git commit -m "Update satimg.jpg at $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
-            git push
+            git push --rebase
             echo "✅ Image committed and pushed."
           fi
