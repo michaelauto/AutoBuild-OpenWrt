@@ -1,0 +1,50 @@
+name: Download Satellite Image
+
+on:
+  schedule:
+    - cron: '0 12 * * *'  # 每天 UTC 12:00（台湾时间 20:00）
+  workflow_dispatch:       # 允许手动触发
+
+jobs:
+  download-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get and parse image URL
+        id: get_image
+        run: |
+          # 下载 JS 文件
+          curl -s https://www.cwa.gov.tw/Data/js/obs_img/Observe_sat.js > satimg.js
+
+          # 用 Python 直接提取并解析（最简单的方法！）
+          IMG_PATH=$(python3 -c '
+          import re, json
+          js = open("satimg.js").read()
+          # 提取 SatImg 的 JSON 部分（移除 var SatImg = 和结尾分号）
+          json_str = re.sub(r"^var SatImg\s*=\s*|;\s*$", "", js, flags=re.DOTALL)
+          # 转换 JS 对象为合法 JSON（单引号变双引号，无引号键名加引号）
+          json_str = re.sub(r"([\'\"])?([a-zA-Z_]\w*)([\'\"])?:", r""\2":", json_str.replace("'", '"'))
+          data = json.loads(json_str)
+          # 直接按路径获取值
+          print(data["Tab4"]["Area1"]["size0"]["C"]["0"]["img"])
+          ')
+
+          # 输出结果
+          echo "Image path: $IMG_PATH"
+          echo "::set-output name=image_url::https://www.cwa.gov.tw/Data/satellite/$IMG_PATH"
+          echo "::set-output name=image_name::$(basename "$IMG_PATH")"
+
+      - name: Download image
+        run: |
+          mkdir -p images
+          curl -o "images/${{ steps.get_image.outputs.image_name }}" \
+            "${{ steps.get_image.outputs.image_url }}"
+
+      - name: Commit and push
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add images/
+          git commit -m "Auto: Update satellite image [${{ steps.get_image.outputs.image_name }}]"
+          git push
