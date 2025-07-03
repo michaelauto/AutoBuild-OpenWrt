@@ -39,68 +39,55 @@ jobs:
           echo -e "\n3. 检查 img 字段示例:"
           grep -m 3 "img" satimg.js || echo "❌ 未找到 img 字段"
 
-      - name: Debug Step 3 - Create Python parser
-        run: |
-          cat << 'EOF' > debug_parser.py
-          import re, json, sys
-          
-          def debug_print(label, content):
-              print(f"🔧 [DEBUG] {label}:")
-              print(content)
-              print("-"*50)
-          
-          try:
-              # 读取文件
-              with open("satimg.js") as f:
-                  js = f.read()
-              debug_print("原始JS前200字符", js[:200])
-              
-              # 提取 SatImg 对象
-              match = re.search(r"var SatImg\s*=\s*({.*?});", js, re.DOTALL)
-              if not match:
-                  print("❌ 无法提取 SatImg 对象")
-                  sys.exit(1)
-              
-              json_str = match.group(1)
-              debug_print("提取的JSON字符串前200字符", json_str[:200])
-              
-              # 转换 JSON
-              json_str = json_str.replace("'", '"')
-              json_str = re.sub(r"([\'\"])?([a-zA-Z_]\w*)([\'\"])?:", r'"\2":', json_str)
-              debug_print("转换后的JSON前200字符", json_str[:200])
-              
-              # 解析 JSON
-              try:
-                  data = json.loads(json_str)
-              except json.JSONDecodeError as e:
-                  print(f"❌ JSON 解析错误: {e}")
-                  debug_print("错误位置上下文", json_str[max(0,e.pos-50):e.pos+50])
-                  sys.exit(1)
-              
-              # 验证数据结构
-              try:
-                  img_path = data["Tab4"]["Area1"]["size0"]["C"]["0"]["img"]
-                  debug_print("完整解析路径", {
-                      "Tab4": type(data["Tab4"]),
-                      "Area1": type(data["Tab4"]["Area1"]),
-                      "size0": type(data["Tab4"]["Area1"]["size0"]),
-                      "C": type(data["Tab4"]["Area1"]["size0"]["C"]),
-                      "0": type(data["Tab4"]["Area1"]["size0"]["C"]["0"]),
-                      "img": img_path
-                  })
-                  print(f"::set-output name=image_url::https://www.cwa.gov.tw/Data/satellite/{img_path}")
-                  print(f"::set-output name=image_name::{img_path.split('/')[-1]}")
-              except KeyError as e:
-                  print(f"❌ 数据结构错误: 缺少键 {e}")
-                  debug_print("可用Tab键", list(data.keys()))
-                  sys.exit(1)
-          
-          except Exception as e:
-              print(f"❌ 发生未预期错误: {type(e).__name__}: {e}")
-              sys.exit(1)
-          EOF
-          
-          echo "✅ 调试解析器已创建"
+      - name: Debug Step 3 - Fixed Python parser
+  run: |
+    cat << 'EOF' > fixed_parser.py
+    import re, json, sys
+
+    def debug_print(label, content):
+        print(f"🔧 [DEBUG] {label}:")
+        print(content)
+        print("-"*50)
+
+    try:
+        # 读取文件
+        with open("satimg.js") as f:
+            js = f.read()
+        debug_print("原始JS", js[:200] + "...")
+        
+        # 改进的多行匹配
+        match = re.search(r"var SatImg\s*=\s*({[\s\S]*?});", js)
+        if not match:
+            print("❌ 错误：未匹配到SatImg对象")
+            debug_print("建议", "检查JS文件是否包含完整的var SatImg = {...};")
+            sys.exit(1)
+        
+        json_str = match.group(1)
+        debug_print("提取的对象", json_str[:200] + "...")
+        
+        # 转换JS对象为合法JSON
+        json_str = (
+            json_str.replace("'", '"')
+            .replace("True", "true")
+            .replace("False", "false")
+        )
+        json_str = re.sub(r"([\{,])\s*([a-zA-Z_]\w*)\s*:", r'\1"\2":', json_str)
+        
+        debug_print("转换后的JSON", json_str[:200] + "...")
+        
+        # 解析并获取目标值
+        data = json.loads(json_str)
+        img_path = data["Tab4"]["Area1"]["size0"]["C"]["0"]["img"]
+        print(f"::set-output name=image_url::https://www.cwa.gov.tw/Data/satellite/{img_path}")
+        print(f"::set-output name=image_name::{img_path.split('/')[-1]}")
+        
+    except Exception as e:
+        print(f"❌ 解析失败: {type(e).__name__}: {e}")
+        sys.exit(1)
+    EOF
+
+    python3 fixed_parser.py
+
 
       - name: Debug Step 4 - Run parser
         id: parser
