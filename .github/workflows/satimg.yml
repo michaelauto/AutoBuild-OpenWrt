@@ -56,7 +56,7 @@ jobs:
               vm.createContext(context);
               vm.runInContext(jsCode, context);
 
-              const imgPath = context.SatImg['Tab0']['Area0']['size0']['C'][0]['img'];
+              const imgPath = context.SatImg['Tab4']['Area1']['size0']['C'][0]['img'];
               const fullUrl = `https://www.cwa.gov.tw/Data/satellite/${imgPath}`;
               console.log('✅ Downloading:', fullUrl);
 
