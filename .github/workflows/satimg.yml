@@ -12,9 +12,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Fetch and parse SatImg
+      - name: Fetch and parse SatImg JS
         run: |
+          cat << 'EOF' > fetch_satimg.js
           const https = require('https');
+          const vm = require('vm');
 
           function fetchJS(url) {
             return new Promise((resolve, reject) => {
@@ -27,22 +29,26 @@ jobs:
           }
 
           (async () => {
-            const url = 'https://www.cwa.gov.tw/Data/js/obs_img/Observe_sat.js';
-            const jsCode = await fetchJS(url);
+            try {
+              const url = 'https://www.cwa.gov.tw/Data/js/obs_img/Observe_sat.js';
+              const jsCode = await fetchJS(url);
 
-            // JS 文件里是类似 var SatImg = {...}，我们提取对象部分执行
-            const vm = require('vm');
-            const context = {};
-            vm.createContext(context); // 创建隔离上下文
-            vm.runInContext(jsCode, context);
+              const context = {};
+              vm.createContext(context); // 安全沙箱
+              vm.runInContext(jsCode, context); // 执行JS定义
 
-            const SatImg = context.SatImg;
+              const SatImg = context.SatImg;
 
-            // 找到第一个可用的图像路径和时间
-            const imgPath = SatImg['Tab0']['Area0']['size0']['C'][0]['img'];
-            const timeText = SatImg['Tab0']['Area0']['size0']['C'][0]['text'];
+              const imgPath = SatImg['Tab0']['Area0']['size0']['C'][0]['img'];
+              const timeText = SatImg['Tab0']['Area0']['size0']['C'][0]['text'];
 
-            console.log('✅ Image Path:', imgPath);
-            console.log('✅ Time Text:', timeText);
+              console.log('✅ Image Path:', imgPath);
+              console.log('✅ Time Text:', timeText);
+            } catch (e) {
+              console.error('❌ Error:', e);
+              process.exit(1);
+            }
           })();
-        shell: node
+          EOF
+
+          node fetch_satimg.js
