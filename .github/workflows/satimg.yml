@@ -1,9 +1,7 @@
-name: Download Satellite Image
+name: Download Satellite Image (Debug Mode)
 
 on:
-  schedule:
-    - cron: '0 12 * * *'  # 每天 UTC 12:00（台湾时间 20:00）
-  workflow_dispatch:       # 允许手动触发
+  workflow_dispatch:  # 仅手动触发便于调试
 
 jobs:
   download-image:
@@ -11,40 +9,132 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get and parse image URL
-        id: get_image
+      - name: Setup debug environment
         run: |
-          # 下载 JS 文件
-          curl -s https://www.cwa.gov.tw/Data/js/obs_img/Observe_sat.js > satimg.js
+          # 安装调试工具
+          sudo apt-get update
+          sudo apt-get install -y jq
+          pip install --upgrade pip
 
-          # 用 Python 直接提取并解析（最简单的方法！）
-          IMG_PATH=$(python3 -c '
-          import re, json
-          js = open("satimg.js").read()
-          # 提取 SatImg 的 JSON 部分（移除 var SatImg = 和结尾分号）
-          json_str = re.sub(r"^var SatImg\s*=\s*|;\s*$", "", js, flags=re.DOTALL)
-          # 转换 JS 对象为合法 JSON（单引号变双引号，无引号键名加引号）
-          json_str = re.sub(r"([\'\"])?([a-zA-Z_]\w*)([\'\"])?:", r""\2":", json_str.replace("'", '"'))
-          data = json.loads(json_str)
-          # 直接按路径获取值
-          print(data["Tab4"]["Area1"]["size0"]["C"]["0"]["img"])
-          ')
-
-          # 输出结果
-          echo "Image path: $IMG_PATH"
-          echo "::set-output name=image_url::https://www.cwa.gov.tw/Data/satellite/$IMG_PATH"
-          echo "::set-output name=image_name::$(basename "$IMG_PATH")"
-
-      - name: Download image
+      - name: Debug Step 1 - Download JS file
         run: |
-          mkdir -p images
-          curl -o "images/${{ steps.get_image.outputs.image_name }}" \
-            "${{ steps.get_image.outputs.image_url }}"
+          JS_URL="https://www.cwa.gov.tw/Data/js/obs_img/Observe_sat.js"
+          echo "▶️ 正在下载 JS 文件..."
+          curl -v -s $JS_URL -o satimg.js
+          
+          echo "🔍 文件内容前100字符:"
+          head -c 100 satimg.js
+          echo -e "\n\n📦 文件大小:" $(wc -c < satimg.js) "bytes"
+          echo "✅ 下载完成"
 
-      - name: Commit and push
+      - name: Debug Step 2 - Inspect JS structure
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add images/
-          git commit -m "Auto: Update satellite image [${{ steps.get_image.outputs.image_name }}]"
-          git push
+          echo "🔎 检查 JS 文件结构..."
+          echo "1. 查找 SatImg 定义:"
+          grep -n "var SatImg" satimg.js || echo "❌ 未找到 SatImg 定义"
+          
+          echo -e "\n2. 检查 Tab4 结构:"
+          grep -A 10 "Tab4" satimg.js || echo "❌ 未找到 Tab4 定义"
+          
+          echo -e "\n3. 检查 img 字段示例:"
+          grep -m 3 "img" satimg.js || echo "❌ 未找到 img 字段"
+
+      - name: Debug Step 3 - Create Python parser
+        run: |
+          cat << 'EOF' > debug_parser.py
+          import re, json, sys
+          
+          def debug_print(label, content):
+              print(f"🔧 [DEBUG] {label}:")
+              print(content)
+              print("-"*50)
+          
+          try:
+              # 读取文件
+              with open("satimg.js") as f:
+                  js = f.read()
+              debug_print("原始JS前200字符", js[:200])
+              
+              # 提取 SatImg 对象
+              match = re.search(r"var SatImg\s*=\s*({.*?});", js, re.DOTALL)
+              if not match:
+                  print("❌ 无法提取 SatImg 对象")
+                  sys.exit(1)
+              
+              json_str = match.group(1)
+              debug_print("提取的JSON字符串前200字符", json_str[:200])
+              
+              # 转换 JSON
+              json_str = json_str.replace("'", '"')
+              json_str = re.sub(r"([\'\"])?([a-zA-Z_]\w*)([\'\"])?:", r'"\2":', json_str)
+              debug_print("转换后的JSON前200字符", json_str[:200])
+              
+              # 解析 JSON
+              try:
+                  data = json.loads(json_str)
+              except json.JSONDecodeError as e:
+                  print(f"❌ JSON 解析错误: {e}")
+                  debug_print("错误位置上下文", json_str[max(0,e.pos-50):e.pos+50])
+                  sys.exit(1)
+              
+              # 验证数据结构
+              try:
+                  img_path = data["Tab4"]["Area1"]["size0"]["C"]["0"]["img"]
+                  debug_print("完整解析路径", {
+                      "Tab4": type(data["Tab4"]),
+                      "Area1": type(data["Tab4"]["Area1"]),
+                      "size0": type(data["Tab4"]["Area1"]["size0"]),
+                      "C": type(data["Tab4"]["Area1"]["size0"]["C"]),
+                      "0": type(data["Tab4"]["Area1"]["size0"]["C"]["0"]),
+                      "img": img_path
+                  })
+                  print(f"::set-output name=image_url::https://www.cwa.gov.tw/Data/satellite/{img_path}")
+                  print(f"::set-output name=image_name::{img_path.split('/')[-1]}")
+              except KeyError as e:
+                  print(f"❌ 数据结构错误: 缺少键 {e}")
+                  debug_print("可用Tab键", list(data.keys()))
+                  sys.exit(1)
+          
+          except Exception as e:
+              print(f"❌ 发生未预期错误: {type(e).__name__}: {e}")
+              sys.exit(1)
+          EOF
+          
+          echo "✅ 调试解析器已创建"
+
+      - name: Debug Step 4 - Run parser
+        id: parser
+        run: |
+          echo "▶️ 开始执行解析器..."
+          python3 debug_parser.py
+          echo "✅ 解析完成"
+          
+          # 验证输出
+          echo -e "\n🔄 输出变量检查:"
+          echo "image_url: ${{ steps.parser.outputs.image_url }}"
+          echo "image_name: ${{ steps.parser.outputs.image_name }}"
+
+      - name: Debug Step 5 - Download test
+        if: steps.parser.outputs.image_url
+        run: |
+          echo "▶️ 测试下载图片..."
+          mkdir -p debug_images
+          curl -v -o "debug_images/${{ steps.parser.outputs.image_name }}" \
+            "${{ steps.parser.outputs.image_url }}"
+          
+          echo -e "\n📊 下载结果:"
+          ls -lh debug_images/
+          file "debug_images/${{ steps.parser.outputs.image_name }}"
+          echo "✅ 下载测试完成"
+
+      - name: Debug Report
+        if: always()
+        run: |
+          echo -e "\n📝 调试报告:"
+          echo "1. JS文件下载: ${{ steps['Debug Step 1 - Download JS file'].outcome }}"
+          echo "2. 结构检查: ${{ steps['Debug Step 2 - Inspect JS structure'].outcome }}"
+          echo "3. 解析器执行: ${{ steps['Debug Step 4 - Run parser'].outcome }}"
+          echo "4. 下载测试: ${{ steps['Debug Step 5 - Download test'].outcome || '未执行' }}"
+          
+          echo -e "\n🔗 图片URL: ${{ steps.parser.outputs.image_url || '未生成' }}"
+          echo "🖼️ 图片名称: ${{ steps.parser.outputs.image_name || '未生成' }}"
